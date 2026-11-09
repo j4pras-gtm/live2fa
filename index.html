@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Private TOTP Authenticator</title>
+  <style>
+    :root { --bg:#fff; --panel:#f8f9fa; --text:#333; --muted:#667085; --border:#d7dce1; --primary:#1769e0; --danger:#b42318; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif; color:var(--text); background:var(--bg); }
+    header { border-bottom:1px solid var(--border); background:#fff; }
+    .nav { max-width:1080px; margin:auto; padding:18px 24px; display:flex; justify-content:space-between; align-items:center; }
+    h1 { margin:0; font-size:21px; font-weight:650; } h1 small { display:block; color:var(--muted); font-size:11px; font-weight:500; }
+    main { max-width:1080px; margin:30px auto; padding:0 24px; }
+    .layout { display:grid; grid-template-columns: minmax(0,1fr) 260px; gap:24px; align-items:start; }
+    .card { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:20px; }
+    label { display:block; font-weight:650; margin-bottom:7px; }
+    textarea, input { width:100%; border:1px solid #c8ced6; border-radius:6px; background:#fff; color:var(--text); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; padding:10px 12px; }
+    textarea { min-height:150px; resize:vertical; }
+    textarea:focus, input:focus { outline:2px solid #b8d2ff; border-color:var(--primary); }
+    .field + .field { margin-top:20px; }
+    .actions { display:flex; gap:10px; margin-top:14px; }
+    button { border:0; border-radius:6px; padding:9px 16px; font:inherit; cursor:pointer; }
+    .primary { color:#fff; background:var(--primary); } .secondary { color:var(--text); background:#e9edf2; }
+    button:disabled { opacity:.55; cursor:wait; }
+    .hint { color:var(--muted); font-size:12px; margin:7px 0 0; }
+    .status { min-height:21px; margin-top:12px; color:var(--muted); font-size:13px; }
+    .error { color:var(--danger); }
+    .settings h2 { margin:0 0 14px; font-size:15px; }
+    .settings label { margin-top:13px; font-size:12px; }
+    .settings input { font-family:inherit; font-size:13px; }
+    .security { margin-top:14px; color:#7a271a; background:#fff4ed; border:1px solid #f6c7a8; border-radius:6px; padding:10px; font-size:12px; }
+    @media (max-width:760px) { .layout { grid-template-columns:1fr; } .nav { padding:16px; } main { margin:20px auto; padding:0 16px; } }
+  </style>
+</head>
+<body>
+  <header><div class="nav"><h1>Private TOTP<small>Authenticator</small></h1><span class="hint">RFC 6238</span></div></header>
+  <main>
+    <div class="layout">
+      <section class="card">
+        <div class="field">
+          <label for="secrets">* 2FA Secret</label>
+          <textarea id="secrets" autocomplete="off" spellcheck="false" placeholder="JBSWY3DPEHPK3PXP\naccount-label|JBSWY3DPEHPK3PXP"></textarea>
+          <p class="hint">Enter one Base32 secret per line. Use <code>label|secret</code> if you want the label preserved in the output.</p>
+        </div>
+        <div class="actions"><button class="primary" id="submit">Submit</button></div>
+        <div class="field">
+          <label for="output">* 2FA Code</label>
+          <textarea id="output" readonly placeholder="account-label|123456"></textarea>
+          <p class="hint">Codes are valid only for the issuer's current time window.</p>
+        </div>
+        <div class="actions"><button class="secondary" id="copy">Copy</button></div>
+        <div class="status" id="status" role="status"></div>
+      </section>
+      <aside class="card settings">
+        <h2>Connection</h2>
+        <label for="apiUrl">API URL</label>
+        <input id="apiUrl" value="" placeholder="Same origin /v1/totp">
+        <p class="hint">Leave blank when this UI is served by the API.</p>
+        <label for="apiKey">API key</label>
+        <input id="apiKey" type="password" autocomplete="off" placeholder="X-API-Key header">
+        <div class="security">For personal or private use only. Do not host this page publicly with real TOTP secrets or API keys. Values are kept only in this page and are not saved.</div>
+      </aside>
+    </div>
+  </main>
+  <script>
+    const $ = id => document.getElementById(id);
+    const status = (text, error=false) => { $('status').textContent = text; $('status').className = error ? 'status error' : 'status'; };
+    $('submit').addEventListener('click', async () => {
+      const lines = $('secrets').value.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+      if (!lines.length) return status('Enter at least one 2FA secret.', true);
+      const endpoint = ($('apiUrl').value.trim() || '').replace(/\/$/, '') + '/v1/totp';
+      const apiKey = $('apiKey').value;
+      $('submit').disabled = true; $('output').value = ''; status('Generating codes…');
+      const results = [];
+      try {
+        for (const line of lines) {
+          const split = line.indexOf('|');
+          const label = split >= 0 ? line.slice(0, split).trim() : '';
+          const secret = split >= 0 ? line.slice(split + 1).trim() : line;
+          const response = await fetch(endpoint, { method:'POST', headers:{'Content-Type':'application/json','X-API-Key':apiKey}, body:JSON.stringify({secret}) });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.detail || `Request failed (${response.status})`);
+          results.push((label ? label + '|' : '') + data.code);
+        }
+        $('output').value = results.join('\n'); status(`${results.length} code${results.length === 1 ? '' : 's'} generated.`);
+      } catch (err) { status(err.message || 'Unable to reach the API.', true); }
+      finally { $('submit').disabled = false; }
+    });
+    $('copy').addEventListener('click', async () => {
+      if (!$('output').value) return status('There is no code to copy.', true);
+      await navigator.clipboard.writeText($('output').value); status('Copied to clipboard.');
+    });
+  </script>
+</body>
+</html>
